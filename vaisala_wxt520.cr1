@@ -1,0 +1,49 @@
+'CR1000 Series Datalogger
+'
+' Record data from Vaisala WXT520 Weather Station using SDI-12
+'
+'Program Author
+'Frank L. Engel
+'
+'Program Version Date
+Const ProgramVersionDate = 20150126
+
+'Weather Station (Vaisala WXT520)
+'   The SDI-12 address for the WXT520 must be zero
+Public WXT520(15)
+Alias WXT520(1)  = Wdmin
+Alias WXT520(2)  = Wdavg
+Alias WXT520(3)  = Wdmax
+Alias WXT520(4)  = Wsmin
+Alias WXT520(5)  = Wsavg
+Alias WXT520(6)  = Wsmax
+Alias WXT520(7)  = airtemp
+Alias WXT520(8)  = relhumidity
+Alias WXT520(9)  = airpressure
+Alias WXT520(10) = Rain
+Alias WXT520(11) = Rduration
+Alias WXT520(12) = Rintensity
+Alias WXT520(13) = Hamount
+Alias WXT520(14) = Hduration
+Alias WXT520(15) = Hintensity
+
+'Table for 10 minute weather station
+DataTable(Vaisala10,True,-1)
+  DataInterval(0,10,Min,0)
+  'CardOut(0,-1)
+  Sample (15,WXT520(),FP2)
+EndTable
+
+BeginProg
+	'Read the weather station
+	'WXT520 SDI-12 Sensor measurements 1-6:
+    SDI12Recorder (WXT520(1),7,"0","M1!",1,0)
+    'WXT520 SDI-12 Sensor measurements 7-9
+    SDI12Recorder (WXT520(7),7,"0","M2!",1,0)
+    'WXT520 SDI-12 Sensor measurements 10-15
+    SDI12Recorder (WXT520(10),7,"0","M3!",1,0)
+	
+	'Call output table to permanently save data
+	CallTable Vaisala10
+  NextScan
+EndProg

@@ -1,20 +1,24 @@
 'CR1000 Series Datalogger
+'
+'Get basic CR1000 System Information
+'
 'Program Author
 'Frank L. Engel
 '
 'Program Version Date
-Const ProgramVersionDate = 20140624
+Const ProgramVersionDate = 20150126
 
 'Declarations
-Public SerNum As Long
-Public OSVersion As String * 18
-Public Program As String * 25
-Public ProgErrors As Long
-Public Low12Volts As Long
-Public LithBat As Float
-'Public WatchDog As Long
-Public SkipScans As Long
-Public FreeCFMem As Float
+Public SerNum         As Long
+Public OSVersion      As String * 18
+Public Program        As String * 25
+Public ProgErrors     As Long
+Public Low12Volts     As Long
+Public LithBat        As Float
+'Public WatchDog     As Long
+Public SkipScans      As Long
+Public FreeCFMem      As Float
+Public RecSysInfoFlag As Boolean
 
 '______________________________Get System Information_____________________________________
 Sub GetSysInfo
@@ -29,3 +33,18 @@ Battery (CR1Volts) 'get battery volts
 	SkipScans  = Status.SkippedScan(1,1)
 	FreeCFMem  = Status.CardBytesFree(1,1)
 EndSub
+
+'Table for GetSysInfo Output
+DataTable(SystemInfo,RecSysInfoFlag,-1)
+  'CardOut(0,-1)
+  Sample (1,Program,String)
+  Sample (1,ProgramVersionDate,String)
+  Sample (1,SerNum,Long)
+  Sample (1,OSVersion,String)
+  Sample (1,ProgErrors,Long)
+  Sample (1,Low12Volts,Long)
+  Sample (1,LithBat,FP2)
+ 'Sample (1,WatchDog,Long)
+  Sample (1,SkipScans,Long)
+  Sample (1,FreeCFMem,IEEE4)
+EndTable
