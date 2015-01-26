@@ -1,0 +1,31 @@
+'CR1000 Series Datalogger
+'Program Author
+'Frank L. Engel
+'
+'Program Version Date
+Const ProgramVersionDate = 20140624
+
+'Declarations
+Public SerNum As Long
+Public OSVersion As String * 18
+Public Program As String * 25
+Public ProgErrors As Long
+Public Low12Volts As Long
+Public LithBat As Float
+'Public WatchDog As Long
+Public SkipScans As Long
+Public FreeCFMem As Float
+
+'______________________________Get System Information_____________________________________
+Sub GetSysInfo
+Battery (CR1Volts) 'get battery volts
+	SerNum     = Status.SerialNumber(1,1)
+	OSVersion  = Status.OSVersion(1,1)
+	Program    = Status.ProgName(1,1)
+	ProgErrors = Status.ProgErrors(1,1)
+	Low12Volts = Status.Low12VCount(1,1)
+	LithBat    = Status.LithiumBattery(1,1)
+	'WatchDog   = Status.WatchdogErrors(1,1)
+	SkipScans  = Status.SkippedScan(1,1)
+	FreeCFMem  = Status.CardBytesFree(1,1)
+EndSub
