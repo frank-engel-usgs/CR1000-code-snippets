@@ -1,0 +1,600 @@
+' ========================================================================================
+' DECODE TDRI CHANNEL MASTER PD0 FORMAT TO CR1000 DATALOGGER
+' ========================================================================================
+' This program will decode PD0 format binary data from a Channel Master. 
+'
+' The basics of the program were derived from Michael R. Simpson's work with Jim DeRose
+' in San Diego.
+'
+' Created by: Frank L. Engel, USGS ILWSC (fengel@usgs.gov)
+Const ProgramVersionDate = 20150129
+
+
+' ========================================================================================
+' DECLARATIONS
+' ========================================================================================
+' USER SETTINGS
+'Program Control
+Const ADCPCom = Com1
+Const BaudRate = 9600
+Const ScanRate = 60 ' Seconds
+Const ScanUnit = 2  ' Unit (1=sec,2=min,3=hour)
+
+'ADCP specifics
+Const MaxBins = 9 
+Const MaxBeams = 2
+Const BadVel = -32768
+Const FlowSign = 1 ' 1=LeftBank, -1=RightBank
+Const BadDataIndicator = NAN
+'Const yes = True
+'Const no = False
+
+'Declare Constants
+Const VelocityScaleWater = 1/304.8 'converts mm/sec to ft/sec
+Const DepthScale = 1/328.08 'converts 0.1mm to ft
+Const MetersToFeet = 3.280839895
+Const DegToRad = (3.14159265358979323846/180)
+
+
+'Data ID's -- These are the byte locations (HEX to DEC) of each part of the PD0 file
+Const FixedLeaderID 		= 0 'data IDs located at the start of each data stream
+Const FirmwareVersionID 	= 2
+Const VariableLeaderID 		= 128
+Const VelocityProfileID 	= 256
+Const CorrelationProfileID 	= 512
+Const RSSIProfileID 		= 768  ' Echo Intensity Profile Data
+Const PGoodProfileID 		= 1024
+Const StatusProfileID 		= 1280
+Const SurfaceTrackStatusID 	= 16384
+Const SurfaceTrackCmdID 	= 16385
+
+'Basic Variable Declarations
+Public PTemp
+
+'Decode Pre-screen Incoming Binary Declarations
+'These are variables used in BeginProg before calls to any Subs
+Dim Longarray(1500) As Long 'Array for the Raw Ensemble
+Dim Nums(2) As Long
+Public HeaderMismatch As Long
+Public BadEnsemble As Long
+Public ScanNo As Long
+Public ADCPdataIn As Boolean
+Public WakeUpProbe As Boolean
+Public ReceivedBytes As Long
+Public Numbytes
+Public NumbytesZero As Long
+
+'Declarations for ChecksumCheck
+Public BadChecksum As Long
+Public CalcCheckSum As Long
+Public EnsChecksum As Long
+Dim EnsembleLen As Long
+Dim TempL As Long
+Dim MSB As Long
+Dim MSB1 As Long
+Dim LSB As Long
+
+'Declarations for MainDecode
+Public Counter As Long
+Public Datatypes As Long
+Dim Offsets(20) As Long
+Public FixedLeadOffset As Long
+Public VarLeadOffset As Long
+Public VelocityOffset As Long
+Public CorrelationOffset As Long
+Public RSSIOffset As Long
+Public SurfaceTrackStatusOffset As Long
+Public NumBeams As Long
+Public NumBins As Long			'WN'
+Public EnsPings As Long			'WP'
+Public BinSize As Long			'WS'
+Public BlankDist As Long 		'WF'
+Public ADCPSerialNo As Long
+Dim TempID As Long				'Place to store variable Offsets to match specific Datatypes
+
+'Declarations for VarLeadDecode
+Dim Temp As Long
+Public BIT As Long
+Public EnsembleNo As Long
+Public ADCPYear As Long
+Public ADCPMonth As Long
+Public ADCPDay As Long
+Public ADCPHour As Long
+Public ADCPMinute As Long
+Public ADCPSecond As Long
+Public ADCPHundreth As Long
+Public ADCPTimeStr As String * 20
+Public ADCPpitch As Float
+Public ADCProll As Float
+Public ADCPtempC As Float
+Public ADCPtempF As Float
+Public ADCPvolts As Float
+
+'Declarations for VelocityDecode
+Dim Bin As Long 'counters for bins
+Public StartBin As Long
+Public EndBin As Long
+Dim Beam As Long 'counters for beams
+Dim Index As Long 'temporary variable
+Dim BinVel As Float 'test variable
+Dim BinStep As Long 'counter variable
+Dim EnsBin As Long 'counter variable
+Public ensVelocity(MaxBins,MaxBeams) As Float
+Public Vel1(MaxBins) As Float
+Public Vel2(MaxBins) As Float
+
+'Declarations for CorrelationDecode
+Public ensCorrelation(MaxBins,MaxBeams) As Float
+Dim NCorr As Long
+Dim AccumCorr As Long
+Public avgCorrelation(MaxBins)
+
+'Declarations for RSSIDecode
+Public ensRSSI(MaxBins,MaxBeams) As Float
+Dim NRSSI As Long
+Dim AccumRSSI As Long
+Dim AvgRSSIAccum As Long
+Dim AvgRSSIcounter As Long
+Public avgRSSI(MaxBins)
+
+'Declarations for SurfaceTrackStatusDecode
+Dim LSB1 As Long
+Public VBDepth as Float
+Public PDepthMin as Float
+Public PDepthMax as Float
+Public PDepth as Float
+
+'Various counters for loops
+Dim i As Long
+Dim j As Long
+Dim k As Long
+Dim m As Long
+Dim v As Long
+
+'Unassigned
+'Dim NextBin As Long
+'Public UseAutoLastBin As Boolean
+'Public CDMAFailure As Boolean
+
+' ========================================================================================
+' DATA TABLES
+' ======================================================================================== 
+DataTable (ADCPcheck,True,-1)
+	OpenInterval
+	'CardOut (xxx,xxx)
+	Sample(1,ADCPSerialNo,Long)
+	Sample(1,ADCPTimeStr,String)
+	Sample(1,ADCPpitch,IEEE4)
+	Sample(1,ADCProll,IEEE4)
+	Sample(1,VBDepth,IEEE4)
+	Sample(1,PDepth,IEEE4)
+	Sample(MaxBins,Vel1(),IEEE4)
+	Sample(MaxBins,Vel2(),IEEE4)
+	Sample(MaxBins,avgCorrelation(),IEEE4)
+	Sample(MaxBins,avgRSSI(),IEEE4)
+EndTable
+	
+
+' ========================================================================================
+' SUBROUTINES
+' ======================================================================================== 
+'            Name                           Description                 
+'-------------------------- ------------------------------------------ 
+' MainDecode                 Drives decoding of PD0 format             
+' VarLeadDecode              Decodes the Variable Leader               
+' VelocityDecode             Decodes the Velocity Profile Data         
+' CorrelationDecode          Decodes Correlation Profile Data          
+' RSSIDecode                 Decodes Echo Intensity Profile Data       
+' SurfaceTrackStatusDecode   Decodes Surface track Status              
+' ChecksumCheck              Compares calc checksum with raw checksum  '-
+
+'______________________________Main Decoder_______________________________________________
+'Main Decoder for Workhorse PD0 file. This Is run after incoming data has passed checks in 
+'main program scan. This decoder parses out the various data types and the variables that 
+'are contained in the fixed header data type. The variable data types are decoded in 
+'separate subroutines and those subroutines are called from this subroutine. 
+  Sub MainDecode
+	DataTypes = LongArray(6)
+    'Get data offsets for each data type
+    For j = 1 To (DataTypes*2) Step 2
+      LSB = LongArray(j+6)
+      MSB = LongArray(j+7)
+      Offsets(Counter)=(LSB + (MSB*256)) + 1
+      Counter = Counter + 1
+    Next j
+    'Get fixed leader offset
+    FixedLeadOffset = Offsets(1)
+    'Get variable leader offset
+    VarLeadOffset = Offsets(2)
+	
+	FixedLeadOffset = FixedLeadOffset - 1 'to line up with RDI Documentation
+	'get number of Beams
+    NumBeams = LongArray(FixedLeadOffset + 9)
+    'Get number of Bins
+    NumBins = LongArray(FixedLeadOffset + 10)
+    'Get Pings per Ensemble
+	'When you decode 2 byte binary data, you have to multiply the most significant byte
+    'by 256
+    LSB = LongArray(FixedLeadOffset + 11)
+    MSB = LongArray(FixedLeadOffset + 12)
+    EnsPings = LSB + (MSB * 256)
+    'Get Bin Size
+    LSB = LongArray(FixedLeadOffset + 13)
+    MSB = LongArray(FixedLeadOffset + 14)
+    BinSize = LSB + (MSB * 256)
+    'Get Blanking distance
+    LSB = LongArray(FixedLeadOffset + 15)
+    MSB = LongArray(FixedLeadOffset + 16)
+    BlankDist = LSB + (MSB * 256)
+	'Get Probe Serial Number
+	LSB = LongArray(FixedLeadOffset + 55)
+    MSB = LongArray(FixedLeadOffset + 56)
+    ADCPSerialNo = LSB + (MSB * 256)
+
+    'get Variable Header Data
+    Call VarLeadDecode
+
+    'Loop through remaining data types, verify their profile IDs and assign proper offsets
+	'Other data can be accommodated here if need be IE percent good etc
+    'If profile IDs match the required data types, then call the appropriate decoders
+    For m = 3 To DataTypes
+      LSB = LongArray(Offsets(m))
+      MSB = LongArray(Offsets(m) + 1)
+      TempID = LSB + (MSB * 256)
+      Select Case TempID
+	  Case VelocityProfileID
+        'OK it matches Velocity ID
+        VelocityOffset = Offsets(m)
+        Call VelocityDecode
+      Case CorrelationProfileID
+        'Ok it matches Correlation ID
+        CorrelationOffset = Offsets(m)
+        Call CorrelationDecode
+      Case RSSIProfileID
+        'OK it matches RSSI ID
+        RSSIOffset = Offsets(m)
+        Call RSSIDecode
+	  Case SurfaceTrackStatusID
+        'Ok it matches Surface track (vertical beam) Status ID
+        SurfaceTrackStatusOffset = Offsets(m)
+        Call SurfaceTrackStatusDecode
+      EndSelect
+    Next m
+
+    'After calling all the decoders, Zero out the LongArray
+    For v = 1 To 1500
+      LongArray(v) = 0
+    Next v
+  EndSub ' MainDecode
+
+  '__________________________Variable Leader Decoder______________________________________
+  'This Sub decodes the variable leader from the longArray
+  Sub(VarLeadDecode)
+    VarLeadOffset = VarLeadOffset - 1 'to line up with RDI Documentation
+    'When you decode 2 byte binary data, you have to multiply the most significant byte
+    'by 256
+    LSB = 0
+    MSB = 0
+    Temp = 0
+	
+    'get Ensemble Number
+    LSB = Longarray(VarLeadOffset + 3)
+    MSB = Longarray(VarLeadOffset + 4)
+    MSB1 = Longarray(VarLeadOffset + 12)
+    EnsembleNo = (256^2 * MSB1) + (256 * MSB) + LSB
+	
+    'Get time from ADCP real time clock
+    ADCPYear = Longarray(VarLeadOffset + 5)
+    ADCPMonth = Longarray(VarLeadOffset + 6)
+    ADCPDay = Longarray(VarLeadOffset + 7)
+    ADCPHour = Longarray(VarLeadOffset + 8)
+    ADCPMinute = Longarray(VarLeadOffset + 9)
+    ADCPSecond = Longarray(VarLeadOffset + 10)
+    ADCPHundreth = Longarray(VarLeadOffset + 11)
+    ADCPTimeStr = ADCPMonth & "/" & ADCPDay & "/" & ADCPYear & CHR(20) & ADCPHour & ":" & ADCPMinute & ":" & ADCPSecond & "." & ADCPHundreth
+    
+	'get BIT
+    LSB = Longarray(VarLeadOffset + 13)
+    MSB = Longarray(VarLeadOffset + 14)
+    BIT = (256 * MSB) + LSB
+    
+	'get Pitch
+    LSB = Longarray(VarLeadOffset + 21)
+    MSB = Longarray(VarLeadOffset + 22)
+    Temp = (256 * MSB) + LSB
+    If Temp > 32767 Then
+      Temp = Temp - 65536
+    EndIf
+    ADCPpitch = Temp * 0.01 'Pitch scale factor
+    
+	'get Roll
+    LSB = Longarray(VarLeadOffset + 23)
+    MSB = Longarray(VarLeadOffset + 24)
+    Temp = (256 * MSB) + LSB
+    If Temp > 32767 Then
+      Temp = Temp - 65536
+    EndIf
+    ADCProll = Temp * 0.01 'Roll scale factor
+    
+	'Get Temperature
+    LSB = Longarray(VarLeadOffset + 27)
+    MSB = Longarray(VarLeadOffset + 28)
+    Temp = (256 * MSB) + LSB
+    If Temp > 32767 Then
+      Temp = Temp - 65536
+    EndIf
+    ADCPtempC = Temp * 0.01 'Temperature scale factor
+    ADCPtempF = ADCPtempC * 9/5 + 32
+    
+	'get ADCPvolts
+    ADCPvolts = Longarray(VarLeadOffset +36)
+  EndSub 'VarLeadDecod
+
+  '________________________________Velocity Decoder_______________________________________
+  ' This Sub decodes the Velocity Profile Data
+  Sub(VelocityDecode)
+	'VelocityOffset = VelocityOffset + 1 'to line up with RDI Documentation
+    'initialize output Arrays
+    'If FlowSign = 0 Then FlowSign = 1
+    For Bin = 1 To MaxBins
+      For Beam = 1 To MaxBeams
+        ensVelocity(Bin,Beam) = BadDataIndicator
+      Next Beam
+    Next Bin
+    BinStep = 1
+    EnsBin = 0
+    For Bin = 1 To NumBins 'Start at Bin 1 Vel 1
+      Temp = VelocityOffset + 8 * EnsBin 'Jump to first velocity bytes
+      EnsBin = Ensbin + BinStep
+      For Beam = 1 To NumBeams
+        Index = Temp + 2 * Beam 'index down Two bytes each beam
+        LSB = LongArray(Index)
+        MSB = LongArray(Index + 1)
+        BinVel = (256 * MSB) + LSB
+        If BinVel = 32768 Then
+          ensVelocity(Bin, Beam) = BadDataIndicator 'bad data
+        Else
+          If BinVel > 32767 Then 'Handle twos compliment (negative velocity)
+            BinVel = BinVel - 65536
+            'BinVel = BinVel * VelocityScaleWater
+            If BinVel < -32767 Then 'Smallest possible velocity
+              BinVel = BadDataIndicator 'bad data
+            Else 'apply flow sign
+				BinVel = BinVel * VelocityScaleWater
+				BinVel = BinVel * FlowSign
+			EndIf
+            ensVelocity(Bin,Beam) = BinVel
+          Else
+            'BinVel = BinVel * VelocityScaleWater
+            If BinVel > 32767 Then 'Largest possible velocity
+				BinVel = BadDataIndicator 'bad data
+			Else
+				BinVel = BinVel * VelocityScaleWater
+				BinVel = BinVel * FlowSign
+            EndIf
+            ensVelocity(Bin,Beam) = BinVel
+          EndIf
+        EndIf
+      Next Beam
+    Vel1(Bin) = ensVelocity(Bin,1) 'Separate the big array into sub arrays
+    Vel2(Bin) = ensVelocity(Bin,2) 
+    Next Bin
+  EndSub 'VelocityDecode
+  
+'_______________Decode Correlation data and averages beams for each bin___________________
+  Sub(CorrelationDecode)
+    'initialize output Arrays
+    For Bin = 1 To MaxBins
+      For Beam = 1 To MaxBeams
+        ensCorrelation(Bin,Beam) = 0
+      Next Beam
+    Next Bin
+    BinStep = 1
+    Ensbin = 0
+    CorrelationOffset = CorrelationOffset + 1 'to get past 2 byte ID
+    For Bin = 1 To NumBins 'Start at Bin 1 Beam 1
+      NCorr = 0
+      AccumCorr = 0
+      Temp = CorrelationOffset + (4 * EnsBin) 'jump down 4 bytes each bin
+      EnsBin = Ensbin + BinStep
+      For Beam = 1 To NumBeams 'only grab one byte each loop
+        AccumCorr = AccumCorr + LongArray(Temp + Beam)
+        NCorr = NCorr + 1
+        ensCorrelation(Bin,Beam) = LongArray(Temp + Beam) 'could also average here
+      Next Beam
+      Select Case NCorr 'average beams for each bin
+      Case 0
+        avgCorrelation(Bin)= 0
+      Case 1
+        avgCorrelation(Bin) = AccumCorr
+      Case 2 To 4
+        avgCorrelation(Bin) = AccumCorr / NCorr
+      Case Else
+        avgCorrelation(Bin) = 0
+      EndSelect
+    Next Bin
+  EndSub 'CorrelationDecode
+  
+'_________Decode Backscatter Amplitude data and averages beams for each bin_______________
+  Sub(RSSIDecode)
+    'initialize output Arrays
+    For Bin = 1 To MaxBins
+      For Beam = 1 To MaxBeams
+        ensRSSI(Bin,Beam) = 0
+      Next Beam
+    Next Bin
+    BinStep = 1
+    Ensbin = 0
+    RSSIOffset = RSSIOffset + 1 'to get past 2 byte ID
+    For Bin = 1 To NumBins 'Start at Bin 1 Beam 1
+      NRSSI = 0 'zero beamwise rssi counter
+      AccumRSSI = 0 'zero beamwise rssi accumulator
+      AvgRSSIAccum = 0 'zero binwise rssi accumulator
+      AvgRSSIcounter = 0 'zero binwise rssi counter
+      Temp = RSSIOffset + (4 * EnsBin) 'jump down 4 bytes each bin
+      EnsBin = Ensbin + BinStep
+      For Beam = 1 To NumBeams 'only grab one byte each loop
+        AccumRSSI = AccumRSSI + LongArray(Temp + Beam)
+        nRSSI = nRSSI + 1
+        ensRSSI(Bin,Beam) = LongArray(Temp + Beam) 'could also average here
+      Next Beam
+      Select Case NRSSI 'average beams for each bin
+      Case 0
+        avgRSSI(Bin)= 0
+      Case 1
+        avgRSSI(Bin) = AccumRSSI
+      Case 2 To 4
+        avgRSSI(Bin) = AccumRSSI / nRSSI
+      Case Else
+        avgRSSI(Bin) = 0
+      EndSelect
+    Next Bin
+  EndSub 'RSSIDecode
+  
+'__________________________Surface Track Status Decoder___________________________________
+  Sub(SurfaceTrackStatusDecode)
+    SurfaceTrackStatusOffset = SurfaceTrackStatusOffset - 1 'to line up with RDI Documentation
+    'When you decode 2 byte binary data, you have to multiply the most significant byte
+    'by 256
+    LSB = 0
+	LSB1 = 0
+    MSB = 0
+	MSB1 = 0
+    
+    'get Depth (Corrected Surface Track)
+    LSB  = Longarray(SurfaceTrackStatusOffset + 3)
+	LSB1 = Longarray(SurfaceTrackStatusOffset + 4)
+    MSB  = Longarray(SurfaceTrackStatusOffset + 5)
+    MSB1 = Longarray(SurfaceTrackStatusOffset + 6)
+    VBDepth =((256^3 * MSB1) + (256^2 * MSB) + (256 * LSB1) + LSB)
+	If VBDepth <> 0 Then
+		VBDepth = VBdepth/10000 * 1/0.3048
+	Else
+		VBDepth = BadDataIndicator
+	EndIf 
+	
+	'get Depth (Corrected Pressure Min/Max)
+    LSB  = Longarray(SurfaceTrackStatusOffset + 39)
+	LSB1 = Longarray(SurfaceTrackStatusOffset + 40)
+    MSB  = Longarray(SurfaceTrackStatusOffset + 41)
+    MSB1 = Longarray(SurfaceTrackStatusOffset + 42)
+    PDepthMin =((256^3 * MSB1) + (256^2 * MSB) + (256 * LSB1) + LSB)
+	If PDepthMin <> 0 Then
+		PDepthMin = PDepthMin/10000 * MetersToFeet
+	Else
+		PDepthMin = BadDataIndicator
+	EndIf
+	
+	'get Depth (Corrected Pressure Max)
+    LSB  = Longarray(SurfaceTrackStatusOffset + 43)
+	LSB1 = Longarray(SurfaceTrackStatusOffset + 44)
+    MSB  = Longarray(SurfaceTrackStatusOffset + 45)
+    MSB1 = Longarray(SurfaceTrackStatusOffset + 46)
+    PDepthMax =((256^3 * MSB1) + (256^2 * MSB) + (256 * LSB1) + LSB)
+	If PDepthMax <> 0 Then
+		PDepthMax = PDepthMax/10000 * MetersToFeet
+	Else
+		PDepthMax = BadDataIndicator
+	EndIf
+	PDepth = (PDepthMin + PDepthMax)/2
+  EndSub 'SurfaceTrackStatusDecode
+
+
+'____Calculate a Checksum for the ensemble and extract ensemble checksum _________________
+Sub ChecksumCheck
+  'Get ensemble length (from the header)
+  LSB = LongArray(3)
+  MSB = LongArray(4)
+  EnsembleLen = LSB + (MSB*256)
+  'calculate checksum here to see if it matches the checksum sent by the ADCP
+  CalcCheckSum = 0
+  k = 0
+  For k = 1 To EnsembleLen
+    CalcCheckSum = CalcCheckSum + LongArray(k)
+  Next k
+  CalcCheckSum = 65535 AND CalcCheckSum
+  EnsCheckSum = LongArray(k)
+  TempL = Longarray(k + 1)
+  EnsCheckSum = EnsChecksum + TempL * 256
+EndSub
+
+
+' ========================================================================================
+' PROGRAM
+' ======================================================================================== 
+BeginProg
+	ADCPdataIn = False
+	SerialOpen (ADCPCom,BaudRate,3,0,2000)'open ADCP PORT
+	Scan (ScanRate,ScanUnit,3,0)
+    ScanNo = ScanNo + 1
+	SubScan (15,Sec,3)
+    'Open port to ADCP and look for the data stream
+    Do While SerialInChk(ADCPCom) 'If bytes at port, read them in
+      i=i+1
+      SerialInBlock(ADCPCom,Nums(1),1) 'Get one byte from port
+      MoveBytes(LongArray(i),3,Nums(1),0,1) 'Put byte in Least significant position
+      'if first two bytes are not correct then throw out ensemble
+      If i = 2 Then
+        If LongArray(1) <> 127 OR LongArray(2) <> 127 'check beginning of ensemble for Hex FF
+        BadEnsemble = BadEnsemble + 1
+        HeaderMismatch = HeaderMismatch + 1
+        SerialFlush(ADCPCom)
+        Exit Do 'if not found, exit loop and get next scan
+      EndIf
+    EndIf
+    'signifies too much data (i.e. data is being stepped on)
+    If i >=3000 Then ExitDo 'exit loop, but still may have valid data
+    Numbytes = i
+  Loop
+  
+  Next SubScan
+    
+  If NumbytesZero > 7 Then 'Ok we're not getting data, lets record bad ensemble and try to wake up the ADCP
+    BadEnsemble = BadEnsemble + 1 'Mark Bad Ensemble
+    
+	'Zero the Channel Master arrays
+    'Call ZeroADCPArrays
+    ADCPdataIn = False 'toggle to no
+    SerialFlush(ADCPCom)
+    'WakeUpProbe = Yes 'try to wake up the ADCP in case it has gone to sleep
+    NumbytesZero = 0
+  EndIf
+  If Numbytes < 1 Then
+    'BadEnsemble = BadEnsemble + 1
+    NumbytesZero = NumbytesZero + 1
+  Else 'we have data
+    NumbytesZero = 0
+  EndIf
+  ReceivedBytes = Numbytes
+  i=0
+  Counter=1
+  Call ChecksumCheck
+  'check that the calculated checksum and ensemble checksum match
+  'if not flag data, flush serial port, and go to end of scan
+  'BadChecksum = False
+  If CalcCheckSum <> EnsChecksum Then
+    BadEnsemble = BadEnsemble + 1
+    BadChecksum = BadChecksum + 1
+    'SerialFlush(ADCPCom)
+    'Checksums don't match so bypass decoders and try again
+  Else
+    'Data is good and checksums match, set flag and call the decoders
+    ADCPdataIn = True
+  EndIf
+    'Data had passed all checks call decoders and calculate velocity & Q
+If ADCPdataIn = True
+PanelTemp(PTemp,250)
+  Call MainDecode
+  'Call GetStage
+  'Call CalcLastGoodBin
+  'Call LastGoodBinCheck
+  'Call OneMinuteCalcs
+  'Call RecToPol(EVelAVG,NVelAVG,speed,dir)
+  'Call CalcQ
+  SerialFlush(ADCPCom)
+  
+  CallTable ADCPcheck  ' Testing data table
+EndIf
+  NextScan
+  EndProg
+  
