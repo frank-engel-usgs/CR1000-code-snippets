@@ -1,0 +1,277 @@
+' ========================================================================================
+' DECODE MINIPRO CO2 PROBE
+' ========================================================================================
+' This program will setup, decode, and log data from a MiniPro CO2 Probe
+'
+' Writen by: Frank L. Engel, USGS ILWSC (fengel@usgs.gov)
+
+'Declare Public Variables
+'Example:
+Const MiniProCom = Com1
+Const NoData = NaN
+Const Cel2Kelvin = 273.15
+Const perc2ppm = 10000
+Const CO2MW = 12.0107 + 2*15.9994 ' Molecular weight of CO2
+Const kH = 29.1 ' Henry's Law constant at 298.15 K
+Const HiThres = 300  ' Threshold CO2 value in % CO2
+Const LowThres = -300 ' Threshold CO2 value in % CO2
+Const YSIsampleRate = 15 'How often to sample the YSI QW probe in minutes
+Const CO2WarmUp = 5  'How long to let the MiniPro warm up, in minutes
+Const CO2DataTime = 5 'How long to Collect Data with the MiniPro
+Const nCO2 = 30*CO2DataTime ' Number of samples to avg for CO2 probe (2 seconds X Data Collection Time)
+
+Public ScanNo As Long
+Public PTemp, batt_volt
+Public strAnswer1 As String * 7000
+Public ParseStr (10) As String * 12
+'Public DataArray(10,nCO2) As Float
+Public YYYY(nCO2) As Long
+Public MM(nCO2) As Long
+Public DD(nCO2) As Long
+Public HH(nCO2) As Long
+Public MN(nCO2) As Long
+Public SS(nCO2) As Long
+Public LoCO2(nCO2) As Float
+Public HiCO2(nCO2) As Float
+Public TempCO2(nCO2) As Float
+Public PresCO2(nCO2) As Float
+Public BflagLo(nCO2) As Boolean
+Public BflagHi(nCO2) As Boolean
+Public BflagTemp(nCO2) As Boolean
+Public LoCO2avg As Float
+Public HiCO2avg As Float
+Public TempCO2avg As Float
+Public LoCO2mgLavg As Float
+Public HiCO2mgLavg As Float
+
+Public YSIcount As Long
+Public CO2count As Long
+Public CO2power As Boolean
+
+
+
+'Define Data Tables.
+DataTable (Test,True,-1) 'Set table size to # of records, or -1 to autoallocate.
+  'DataInterval (0,3,Min,-1)
+  Sample (1,batt_volt,FP2)
+  Sample (1,PTemp,FP2)
+  Sample (1,LoCO2avg,FP2)
+  Sample (1,HiCO2avg,FP2)
+  Sample (1,TempCO2avg,FP2)
+  Sample (1,LoCO2mgLavg,FP2)
+  Sample (1,HiCO2mgLavg,FP2)
+EndTable
+
+'Define Subroutines
+Sub ScreenCO2
+  Dim i
+	' Reset Flags
+	For i = 1 To nCO2
+		BflagLo(i) = False
+		BflagHi(i) = False
+	Next i
+
+	' Check to see if each CO2 reading is within Low and High thresholds
+	' If invalid, set flag and make no data value
+	For i = 1 To nCO2
+		If LoCO2(i) > HiThres OR LoCO2(i) < LowThres OR LoCO2(i) = NoData Then
+			BflagLo(i) = True
+			LoCO2(i) = NoData
+		EndIf
+		If HiCO2(i) > HiThres OR HiCO2(i) < LowThres OR HiCO2(i) = NoData Then
+			BflagHi(i) = True
+			HiCO2(i) = NoData
+		EndIf
+	Next i
+EndSub
+
+' This is a temp sub to screen Tempurature from the CO2 probe
+' Ultimately, we will use the YSI temps for the record.
+Sub ScreenCO2Temp
+  Dim i
+	' Reset Flags
+	For i = 1 To nCO2
+		BflagTemp(i) = False
+	Next i
+
+	' Check to see if each Temp reading is within Low and High thresholds
+	' If invalid, set flag and make no data value
+	For i = 1 To nCO2
+		If TempCO2(i) > HiThres OR TempCO2(i) < LowThres OR TempCO2(i) = NoData Then
+			BflagTemp(i) = True
+			TempCO2(i) = NoData
+		EndIf
+	Next i
+EndSub
+
+
+' Average only the valid  LoCO2 measurements
+Sub AverageLoCO2
+	' Counters. idx will be the denominator in the average
+	Dim j
+  Public idx
+  idx = 0
+  LoCO2avg = 0
+	
+	' Set the avg CO2 to NaN. This will remain NaN if anything goes wrong, or
+	' there are no valid measurements in the scan
+	'LoCO2avg = NaN
+	For j = 1 To nCO2
+		If BflagLo(j) = False Then ' CO2 is valid, include in average
+			' Sum the valid CO2 and accumulate the denominator
+			LoCO2avg = LoCO2avg + LoCO2(j)
+			idx = idx + 1
+		EndIf
+	Next j
+	
+	' If there at least 1 valid measurment, divide the sum of the valid CO2s
+	' by the number of valid CO2s to get average.
+	If idx > 0 Then
+		LoCO2avg = LoCO2avg/idx
+	EndIf
+EndSub
+
+' Average only the valid  LoCO2 measurements
+Sub AverageHiCO2
+	' Counters. idx will be the denominator in the average
+	Dim j
+  Dim idx
+  idx = 0
+  HiCO2avg = 0
+	
+	' Set the avg CO2 to NaN. This will remain NaN if anything goes wrong, or
+	' there are no valid measurements in the scan
+	'HiCO2avg = NaN
+	For j = 1 To nCO2
+		If BflagHi(j) = False Then ' CO2 is valid, include in average
+			' Sum the valid CO2 and accumulate the denominator
+			HiCO2avg = HiCO2avg + HiCO2(j)
+			idx = idx + 1
+		EndIf
+	Next j
+	
+	' If there at least 1 valid measurment, divide the sum of the valid CO2s
+	' by the number of valid CO2s to get average.
+	If idx > 0 Then
+		HiCO2avg = HiCO2avg/idx
+	EndIf
+EndSub
+
+' This is a temp sub to average Tempurature from the CO2 probe
+' Ultimately, we will use the YSI temps for the record.
+Sub AverageTempCO2
+	' Counters. idx will be the denominator in the average
+	Dim j
+  Public idy
+  idy = 0
+  TempCO2avg = 0
+	
+	' Set the avg CO2 to NaN. This will remain NaN if anything goes wrong, or
+	' there are no valid measurements in the scan
+	'LoCO2avg = NaN
+	For j = 1 To nCO2
+		If BflagTemp(j) = False Then ' CO2 is valid, include in average
+			' Sum the valid CO2 and accumulate the denominator
+			TempCO2avg = TempCO2avg + TempCO2(j)
+			idy = idy + 1
+		EndIf
+	Next j
+	
+	' If there at least 1 valid measurment, divide the sum of the valid CO2s
+	' by the number of valid CO2s to get average.
+	If idy > 0 Then
+		TempCO2avg = TempCO2avg/idy
+	EndIf
+EndSub
+
+' Convert CO2 percent to CO2 mg/L
+Sub CO2perc2mgL
+  Dim kHT As Float
+  Dim TempK As Float
+  
+  ' Get tempurature in Kelvin
+  TempK = TempCO2avg + Cel2Kelvin
+  
+  ' Compute adjusted Henry's Law
+  kHT = kH * EXP(2400*((1/TempK)-(1/298.15)))
+  
+  ' Compute CO2 in ppm
+  LoCO2mgLavg = (CO2MW*LoCO2avg*perc2ppm)/(1000*kHT)
+  HiCO2mgLavg = (CO2MW*HiCO2avg*perc2ppm)/(1000*kHT)
+EndSub
+
+'Main Program
+BeginProg
+  ' Make sure minipro power is OFF
+  SW12(0)
+  CO2power = False
+  
+
+
+  Scan (5,Min,0,0)
+    ScanNo = ScanNo + 1
+    ' Open the serial port for the MiniPro
+    ' The baud rate is fixed at 9600. Don't edit this value
+    SerialOpen (MiniProCom,9600,0,0,2000)
+    
+    ' Measure with the YSI
+    If TimeIntoInterval(0,YSIsampleRate,min) Then
+      'Delay(0,20,Sec)
+      YSIcount = YSIcount + 1
+    EndIf
+           
+    ' Turn the MiniPro on and let it warm up
+    If TimeIntoInterval(0,YSIsampleRate,min) Then 
+      SW12(1)
+      CO2power = True
+      CO2count = CO2count + 1
+      
+      Delay(0,CO2WarmUp,Min) ' This is the probe warmup period
+      Dim i
+      i = 1
+      SubScan (2,Sec,nCO2)
+        PanelTemp (PTemp,250)
+        Battery (batt_volt)
+        SerialIn (strAnswer1,MiniProCom,200,CHR(13)+CHR(10),62)'get data
+        SerialFlush (MiniProCom)'clear the com buffer
+        SplitStr (ParseStr(),strAnswer1," ",10,0)
+        YYYY(i) = ParseStr(1)
+        MM(i) = ParseStr(2)
+        DD(i) = ParseStr(3)
+        HH(i) = ParseStr(4)
+        MN(i) = ParseStr(5)
+        SS(i) = ParseStr(6)
+        LoCO2(i) = ParseStr(7)
+        HiCO2(i) = ParseStr(8)
+        TempCO2(i) = ParseStr(9)
+        PresCO2(i) = ParseStr(10)
+        i = i + 1
+        
+      NextSubScan
+      'Screen and Average the data
+       Call ScreenCO2
+       Call ScreenCO2Temp
+       Call AverageLoCO2
+       Call AverageHiCO2
+       Call AverageTempCO2
+       
+       'Convert CO2 percent to CO2 mgL
+       Call CO2perc2mgL
+       
+      ' Call data tables
+      CallTable Test
+    EndIf
+    
+    ' Close the port (needed?)
+    SerialClose(MiniProCom)
+      
+    'Cut power to probe
+    SW12(0) 
+    CO2power = False
+    
+      
+  
+    
+  NextScan
+EndProg
+

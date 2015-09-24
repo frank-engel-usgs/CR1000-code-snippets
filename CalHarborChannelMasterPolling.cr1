@@ -1,4 +1,5 @@
 ' ========================================================================================
+' CALUMET HARBOR GAP CHANNEL MASTER CONTROL PROGRAM
 ' DECODE TDRI CHANNEL MASTER PD0 FORMAT TO CR1000 DATALOGGER USING POLLING
 ' ========================================================================================
 ' This program will decode PD0 format binary data from a Channel Master set to polling
@@ -8,7 +9,7 @@
 ' in San Diego.
 '
 ' Created by: Frank L. Engel, USGS ILWSC (fengel@usgs.gov)
-Const ProgramVersionDate = 20150312
+Const ProgramVersionDate = 20150619
 
 ' ========================================================================================
 ' INSTRUCTIONS AND SETUP -- YOU MUST READ ME!!!
@@ -24,25 +25,29 @@ Const ProgramVersionDate = 20150312
 ' HOW DO I CONNECT AND SETUP THE ADCP?
 ' 1. Use the RS-232 pigtails to connect the ADCP to the CR1000 via the COM port. Assign
 '    the port contants:     
-Const ADCPCom1 = Com1  'TX/RX and GRD'
+'         WIRING (for included rs232 pigtail, NOT CS branded pigtail):
+'         C1  RED
+'         C2  BROWN
+'         G   YELLOW
+Const ADCPCom1 = Com1  'TX/RX and GRD == RED/BRN/YELLOW
 Const BaudRate = 9600
 '
 ' 2. Decide the program Scan Rate. It should be about as long as the desired ADCP ensemble
 '    time. E.g., if you want the ADCP to average 1-min velocities, then set the ScanRate
 '    to 60 seconds.
-Const ScanRate = 60 ' Seconds
+Const ScanRate = 120 ' Seconds
 '
 ' 3. Use WinH-ADCP to setup the instruments for ENGLISH units, PDO output. Take special 
 '    notice of the WP, TP, and CF commands. YOU MUST ADD CF01110 TO THE USER COMMANDS
 '    Record these values in the program:
-Const WS       = 671           'Cell size in cm
+Const WS       = 800           'Cell size in cm
 Const WM       = 1             'Water mode
-Const WP       = 45            'Num of water pings
-Const WF       = 457           'Blanking distance in cm
-Const TE       = "01:00:00.00" 'Time in ensemble. Not necessary to adjust this, but you can
-Const TP       = "00:01:00"    'Time between pings
-Const VP       = 3             'Num of acoustic stage pings
-Const MaxBins  = 9             'WNxx
+Const WP       = 100            'Num of water pings
+Const WF       = 600           'Blanking distance in cm
+Const TE       = "00:01:00.00" 'Time in ensemble. Not necessary to adjust this, but you can
+Const TP       = "00:01.00"    'Time between pings
+Const VP       = 1             'Num of acoustic stage pings
+Const MaxBins  = 10            'WNxx
 Const MaxBeams = 2             '2 for Channel Master
 '
 ' 4. Now determine the size of an ensemble. The easiest way to do this is with
@@ -54,12 +59,12 @@ Const MaxBeams = 2             '2 for Channel Master
 '
 '    NOTE: BBCheck will also give you an Ensemble Size in bytes. This is NOT the correct
 '    Number. You MUST verify the actual number of transmitted bytes.
-Const MaxBytes = 598+1 'Need to be NBytes(esn)+1
+Const MaxBytes = 624+1 'Need to be NBytes(esn)+1
 
 ' 5. Compute the ensemble time delay. This is the amount of time that the CR1000 will wait 
 '    before checking to see if there is data in the serial buffer. Make this number 
 '    slightly MORE than the actual time it takes to get data back from the ADCP.
-Const EsnTime  = 15  'Seconds cr1000 has to wait for an enemble (WP x TP + Overhead)
+Const EsnTime  = 105  'Seconds cr1000 has to wait for an enemble (WP x TP + Overhead)
 ' ========================================================================================
 
 
@@ -232,6 +237,22 @@ DataTable (ADCPcheck1,True,-1)
   'CardOut (xxx,xxx)
   Sample(1,ADCPSerialNo,Long)
   Sample(1,ADCPTimeStr,String)
+  Sample(1,ADCPpitch,FP2)
+  Sample(1,ADCProll,FP2)
+  Sample(1,VBDepth,FP2)
+  Sample(1,PDepth,FP2)
+  Sample(MaxBins,Vel1(),FP2)
+  Sample(MaxBins,Vel2(),FP2)
+  Sample(MaxBins,avgCorrelation(),FP2)
+  Sample(MaxBins,avgRSSI(),FP2)
+EndTable
+
+DataTable (TwoMinute,True,-1)
+  OpenInterval
+  CardOut (0,-1)
+  'Sample(1,ADCPSerialNo,Long)
+  'Sample(1,ADCPTimeStr,String)
+  Sample(1,BVoltage,FP2)
   Sample(1,ADCPpitch,FP2)
   Sample(1,ADCProll,FP2)
   Sample(1,VBDepth,FP2)
@@ -750,7 +771,8 @@ BeginProg
       SerialFlush(ADCPCom1)
 
       'Data table
-      CallTable ADCPcheck1
+      'CallTable ADCPcheck1
+      CallTable TwoMinute
 
       'Clear the ADCP arrays so they are empty for next scan/ADCP
       Call ZeroADCPArrays

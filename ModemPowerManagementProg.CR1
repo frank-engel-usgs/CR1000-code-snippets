@@ -1,0 +1,100 @@
+'Power Managment Test Program
+'Frank L. Engel, USGS (fengel@usgs.gov)
+Const VersionDate = 20150923
+Public PTemp, batt_volt
+
+'Modem switched 12 volt instructions
+Const ScanRate = 1 'minutes
+Const PowerON = 1 'set to 1 if just using SW12v port. set to 0 if using Mosfet Chip
+Const PowerOFF = 0 'set to 0 if just using SW12v port. set to 1 if using Mosfet Chip
+Public ModemOnMinStart As Long 
+Public ModemOnLength As Long 'the number of minutes the modem will stay on (should be divisable by scan rate)
+Public ModemPower As Boolean
+Public ModemProgramTimer
+Public ModemStatusChecked As Boolean
+Public Current_Time(9)'Time variable to be used in program to switch power for the modem
+Dim k  'counter
+Dim j  'counter
+Public ModemTimesFound As Boolean
+Public ModemSwitch_Flag As Boolean
+Public ModemOn(24) As Long'array contains the hours for which the modem will be switched on: a 0 for an entry will keep the modem off for that hour, a value greater than 0 will turn the modem on
+
+'Main Program
+BeginProg
+  '=======================================================================================
+  'Modem Power Managment Initialization
+  'PUT THIS CODE RIGHT AFTER BEGINPROG
+  'NOTE: You can set these AFTER the program starts manually. BUT they will reset to these
+  'defaults if the program is restarted (power loss)
+  ModemOnMinStart = 8 'Min. on the hour modem will turn on (must be divisalbe by ScanRate)
+  ModemOnLength = 3 'Time modem will remain on (approx.)
+  For j = 1 To 24
+    ModemOn(j) = 1
+  Next j
+  ModemStatusChecked = True 'Cause program to check whether to turn on modem
+  ModemSwitch_Flag = False 'Switch on P2--not implemented.
+  SW12(PowerOFF)
+  '=======================================================================================
+  
+  Scan (ScanRate,min,0,0)
+    PanelTemp (PTemp,250)
+    Battery (batt_volt)
+
+   '======================================================================================    
+	 'Checks the modem on array and if there are no ON times then it sets the 12 oclock 
+	 'hour to be ON. Also, record the time at start of scan.
+	 'PUT THIS CODE NEAR THE BEGINNING OF THE SCAN
+ 	  RealTime(Current_Time)
+    ModemTimesFound = False
+    For j = 1 To 24
+    If ModemOn(j)>0
+    ModemTimesFound = True
+    EndIf
+    Next j
+    If ModemTimesFound =  False  
+    ModemOn(12) = 1
+    EndIf
+   '======================================================================================
+    
+   '======================================================================================
+   'This code controls the power to the modem.
+   If TimeIntoInterval(ModemOnMinStart,60,min) AND ModemSwitch_Flag = False
+       ModemStatusChecked = False
+   EndIf     
+   If ModemStatusChecked = False AND ModemSwitch_Flag = False
+     For k=1 To 24
+       If Current_Time(4) = k
+         If ModemOn(k) >0
+           SW12(PowerON)
+           ModemPower = True
+           ModemStatusChecked = True
+           'Resets and starts a timer which counts in minutes
+           ModemProgramTimer=Timer(2,min,2)
+         Else
+           ModemStatusChecked = True
+           'Resets and stops a timer which counts in minutes
+           ModemProgramTimer=Timer(2,min,3)
+           SW12(PowerOFF)
+           ModemPower = False
+         EndIf
+       EndIf
+     Next
+   EndIf
+   'Assign the current timer value to the timer variable
+   ModemProgramTimer = Timer(2,min,4) 
+   'Check the modem program timer to see if the specified time for the modem to stay on 
+   'has elapsed. If so, turn power off
+   If ModemProgramTimer >= ModemOnLength AND ModemSwitch_Flag = False   
+     SW12(PowerOFF)
+     ModemPower = False
+     ModemProgramTimer=Timer(2,min,3)
+   EndIf
+   '======================================================================================
+    
+    
+		'Call Output Tables
+		'Example:
+		'CallTable Test
+	NextScan
+EndProg
+
