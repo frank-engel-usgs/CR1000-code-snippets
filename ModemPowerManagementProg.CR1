@@ -1,4 +1,4 @@
-'Power Managment Test Program
+'Power Management Test Program
 'Frank L. Engel, USGS (fengel@usgs.gov)
 Const VersionDate = 20150923
 Public PTemp, batt_volt
@@ -8,7 +8,7 @@ Const ScanRate = 1 'minutes
 Const PowerON = 1 'set to 1 if just using SW12v port. set to 0 if using Mosfet Chip
 Const PowerOFF = 0 'set to 0 if just using SW12v port. set to 1 if using Mosfet Chip
 Public ModemOnMinStart As Long 
-Public ModemOnLength As Long 'the number of minutes the modem will stay on (should be divisable by scan rate)
+Public ModemOnLength As Long 'the number of minutes the modem will stay on (should be divisible by scan rate)
 Public ModemPower As Boolean
 Public ModemProgramTimer
 Public ModemStatusChecked As Boolean
@@ -22,11 +22,11 @@ Public ModemOn(24) As Long'array contains the hours for which the modem will be 
 'Main Program
 BeginProg
   '=======================================================================================
-  'Modem Power Managment Initialization
+  'Modem Power Management Initialization
   'PUT THIS CODE RIGHT AFTER BEGINPROG
   'NOTE: You can set these AFTER the program starts manually. BUT they will reset to these
   'defaults if the program is restarted (power loss)
-  ModemOnMinStart = 8 'Min. on the hour modem will turn on (must be divisalbe by ScanRate)
+  ModemOnMinStart = 8 'Min. on the hour modem will turn on (must be divisible by ScanRate)
   ModemOnLength = 3 'Time modem will remain on (approx.)
   For j = 1 To 24
     ModemOn(j) = 1
